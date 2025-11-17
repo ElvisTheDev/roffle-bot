@@ -2,6 +2,7 @@ import express from "express";
 import fetch from "node-fetch";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import cors from "cors";
 
 // --- Environment ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -26,6 +27,15 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// ✅ allow your miniapp (Vercel) to call this server (Render)
+app.use(
+  cors({
+    origin: APP_URL, // "https://roffle.vercel.app"
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
 // Health check
 app.get("/", (req, res) => res.send("ROFFLE bot is running."));
@@ -316,3 +326,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
