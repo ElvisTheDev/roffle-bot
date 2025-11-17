@@ -321,9 +321,85 @@ app.post("/spin", async (req, res) => {
   }
 });
 
+// --- Telegram Stars: create invoice link for miniapp purchases ---
+app.post("/stars/create-invoice", async (req, res) => {
+  try {
+    const { tg_id, item_type, item_id } = req.body || {};
+
+    // 1) Basic validation
+    if (!tg_id || !item_type || !item_id) {
+      return res.status(400).json({ ok: false, error: "missing_params" });
+    }
+
+    // 2) payload we can later verify in webhook (optional, but good practice)
+    const payload = JSON.stringify({ tg_id, item_type, item_id });
+
+    // 3) Decide title/description/price based on what is being purchased
+    let title = "ROFFLE item";
+    let description = "ROFFLE in-game unlock";
+    let amountStars = 0; // integer amount of Stars
+
+    // 🔹 PREMIUM TIERS (must match your TIERS.priceStars in frontend)
+    if (item_type === "tier") {
+      if (item_id === "plus") {
+        title = "$ROF Premium⚡️";
+        amountStars = 700;
+      } else if (item_id === "pro") {
+        title = "$ROF Plus⭐️";
+        amountStars = 1400;
+      } else if (item_id === "prem") {
+        title = "$ROF Pro👑";
+        amountStars = 2100;
+      }
+    }
+    // 🔹 WHEEL SKINS / BACKGROUNDS (your config uses 299 ⭐ for paid skins)
+    else if (item_type === "wheel" || item_type === "bg") {
+      amountStars = 299;
+      title = item_type === "wheel" ? "ROFFLE Wheel Skin" : "ROFFLE Background Skin";
+    }
+
+    if (!amountStars || amountStars <= 0) {
+      return res.status(400).json({ ok: false, error: "invalid_price" });
+    }
+
+    // 4) Call Telegram Bot API: createInvoiceLink
+    const tgRes = await fetch(`${TG_API}/createInvoiceLink`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        description,
+        payload,         // 👈 our custom data (tg_id, item_type, item_id)
+        currency: "XTR", // 👈 Telegram Stars
+        prices: [
+          {
+            label: title,
+            amount: amountStars, // integer Stars
+          },
+        ],
+      }),
+    });
+
+    const tgJson = await tgRes.json().catch(() => null);
+
+    if (!tgJson || !tgJson.ok) {
+      console.error("createInvoiceLink error:", tgJson);
+      return res.status(500).json({ ok: false, error: "telegram_invoice_failed" });
+    }
+
+    // 5) Success → send the invoice link back to the miniapp
+    return res.json({
+      ok: true,
+      invoice_link: tgJson.result,
+    });
+  } catch (e) {
+    console.error("Stars invoice endpoint error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
-
