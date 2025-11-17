@@ -80,6 +80,23 @@ function randInt(min, max) {
   return crypto.randomInt(min, max + 1);
 }
 
+// ⭐ Common price helper (used by invoice + validation)
+function getStarsPrice(item_type, item_id) {
+  let amountStars = 0;
+
+  if (item_type === "tier") {
+    // Must match TIERS.priceStars in frontend
+    if (item_id === "plus") amountStars = 700;
+    else if (item_id === "pro") amountStars = 1400;
+    else if (item_id === "prem") amountStars = 2100;
+  } else if (item_type === "wheel" || item_type === "bg") {
+    // All paid skins use 299 ⭐ in your config
+    amountStars = 299;
+  }
+
+  return amountStars;
+}
+
 // --- Telegram helper: send Play button ---
 async function sendPlayButton(chatId, name = "") {
   const text = `👋 Hey ${name || "there"}! Tap below to play ROFFLE:`;
@@ -226,16 +243,131 @@ async function handleReferral(refCode, fromUser) {
   }
 }
 
+// ⭐ Answer pre-checkout queries (MUST be done for payments to succeed)
+async function handlePreCheckout(pre) {
+  try {
+    // Optional: validate price vs payload
+    let expectedAmount = 0;
+    try {
+      const payloadObj = JSON.parse(pre.invoice_payload);
+      expectedAmount = getStarsPrice(
+        payloadObj.item_type,
+        payloadObj.item_id
+      );
+    } catch {
+      // if parsing fails, we can still just approve if you want
+    }
+
+    const ok =
+      expectedAmount > 0 ? pre.total_amount === expectedAmount : true;
+
+    const body = {
+      pre_checkout_query_id: pre.id,
+      ok,
+      error_message: ok
+        ? undefined
+        : "Price mismatch, please contact support.",
+    };
+
+    const res = await fetch(`${TG_API}/answerPreCheckoutQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || !data.ok) {
+      console.error("answerPreCheckoutQuery error:", data);
+    }
+  } catch (e) {
+    console.error("handlePreCheckout error:", e);
+  }
+}
+
+// ⭐ Handle successful Stars payment → grant tier/skin
+async function handleSuccessfulPayment(msg) {
+  const sp = msg.successful_payment;
+  const from = msg.from;
+
+  let payload;
+  try {
+    payload = JSON.parse(sp.invoice_payload);
+  } catch (e) {
+    console.error("Invalid invoice_payload:", sp.invoice_payload);
+    return;
+  }
+
+  const { tg_id, item_type, item_id } = payload;
+  const telegramId = tg_id || from.id;
+
+  console.log("✅ successful_payment:", {
+    telegramId,
+    item_type,
+    item_id,
+    total_amount: sp.total_amount,
+    currency: sp.currency,
+  });
+
+  try {
+    if (item_type === "tier") {
+      // Upgrade user's premium_tier
+      const { error } = await supabase
+        .from("roff_users")
+        .update({
+          premium_tier: item_id,
+          last_seen: new Date().toISOString(),
+        })
+        .eq("tg_id", telegramId);
+
+      if (error) {
+        console.error("Update premium_tier error:", error);
+      }
+    } else if (item_type === "wheel" || item_type === "bg") {
+      // Insert to inventory (no duplicate check for simplicity)
+      const { error } = await supabase.from("roff_inventory").insert({
+        tg_id: telegramId,
+        item_type: item_type,
+        item_id: item_id,
+      });
+
+      if (error) {
+        console.error("Insert inventory error:", error);
+      }
+    }
+
+    // Optional confirmation DM
+    await fetch(`${TG_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: telegramId,
+        text: `✅ Payment received: ${item_type} "${item_id}" unlocked in ROFFLE!`,
+      }),
+    });
+  } catch (e) {
+    console.error("handleSuccessfulPayment error:", e);
+  }
+}
+
 // --- Webhook endpoint ---
 app.post("/webhook", async (req, res) => {
   try {
     const u = req.body;
+
+    // ⭐ payment: pre-checkout
+    if (u.pre_checkout_query) {
+      await handlePreCheckout(u.pre_checkout_query);
+    }
 
     if (u.message) {
       const msg = u.message;
       const chatId = msg.chat?.id;
       const name = msg.from?.first_name || "";
       const text = msg.text || "";
+
+      // ⭐ payment: successful payment
+      if (msg.successful_payment) {
+        await handleSuccessfulPayment(msg);
+      }
 
       // /start <refCode> → handle referral
       if (typeof text === "string" && text.startsWith("/start")) {
@@ -331,50 +463,44 @@ app.post("/stars/create-invoice", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_params" });
     }
 
-    // 2) payload we can later verify in webhook (optional, but good practice)
+    // payload we can later verify in webhook
     const payload = JSON.stringify({ tg_id, item_type, item_id });
 
-    // 3) Decide title/description/price based on what is being purchased
-    let title = "ROFFLE item";
-    let description = "ROFFLE in-game unlock";
-    let amountStars = 0; // integer amount of Stars
-
-    // 🔹 PREMIUM TIERS (must match your TIERS.priceStars in frontend)
-    if (item_type === "tier") {
-      if (item_id === "plus") {
-        title = "$ROF Premium⚡️";
-        amountStars = 700;
-      } else if (item_id === "pro") {
-        title = "$ROF Plus⭐️";
-        amountStars = 1400;
-      } else if (item_id === "prem") {
-        title = "$ROF Pro👑";
-        amountStars = 2100;
-      }
-    }
-    // 🔹 WHEEL SKINS / BACKGROUNDS (your config uses 299 ⭐ for paid skins)
-    else if (item_type === "wheel" || item_type === "bg") {
-      amountStars = 299;
-      title = item_type === "wheel" ? "ROFFLE Wheel Skin" : "ROFFLE Background Skin";
-    }
-
+    // 2) decide price
+    const amountStars = getStarsPrice(item_type, item_id);
     if (!amountStars || amountStars <= 0) {
       return res.status(400).json({ ok: false, error: "invalid_price" });
     }
 
-    // 4) Call Telegram Bot API: createInvoiceLink
+    let title = "ROFFLE item";
+    let description = "ROFFLE in-game unlock";
+
+    if (item_type === "tier") {
+      if (item_id === "plus") title = "$ROF Premium⚡️";
+      else if (item_id === "pro") title = "$ROF Plus⭐️";
+      else if (item_id === "prem") title = "$ROF Pro👑";
+      description = `Unlock ${title} tier in ROFFLE.`;
+    } else if (item_type === "wheel") {
+      title = "ROFFLE Wheel Skin";
+      description = `Unlock wheel skin "${item_id}" in ROFFLE.`;
+    } else if (item_type === "bg") {
+      title = "ROFFLE Background Skin";
+      description = `Unlock background skin "${item_id}" in ROFFLE.`;
+    }
+
+    // 3) Call Telegram Bot API: createInvoiceLink
     const tgRes = await fetch(`${TG_API}/createInvoiceLink`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title,
         description,
-        payload,         // 👈 our custom data (tg_id, item_type, item_id)
-        currency: "XTR", // 👈 Telegram Stars
+        payload, // our custom data (tg_id, item_type, item_id)
+        currency: "XTR", // Telegram Stars
         prices: [
           {
             label: title,
-            amount: amountStars, // integer Stars
+            amount: amountStars, // integer amount of Stars
           },
         ],
       }),
@@ -384,10 +510,12 @@ app.post("/stars/create-invoice", async (req, res) => {
 
     if (!tgJson || !tgJson.ok) {
       console.error("createInvoiceLink error:", tgJson);
-      return res.status(500).json({ ok: false, error: "telegram_invoice_failed" });
+      return res
+        .status(500)
+        .json({ ok: false, error: "telegram_invoice_failed" });
     }
 
-    // 5) Success → send the invoice link back to the miniapp
+    // 4) Success → send the invoice link back to the miniapp
     return res.json({
       ok: true,
       invoice_link: tgJson.result,
