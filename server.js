@@ -49,6 +49,35 @@ const TIER_MULT = {
   prem: 5,
 };
 
+// --- Booster bundles config (MUST match frontend) ---
+const BUNDLE_CONFIG = {
+  mini: {
+    title: "Mini Booster Bundle",
+    description: "20,000 $ROF · 100 spins · 1 Golden Ticket",
+    stars: 299,
+    rof: 20000,
+    spins: 100,
+    tickets: 1,
+  },
+  medi: {
+    title: "Medi Booster Bundle",
+    description: "50,000 $ROF · 250 spins · 2 Golden Tickets",
+    stars: 599,
+    rof: 50000,
+    spins: 250,
+    tickets: 2,
+  },
+  maxi: {
+    title: "Maxi Booster Bundle",
+    description: "125,000 $ROF · 500 spins · 3 Golden Tickets",
+    stars: 1199,
+    rof: 125000,
+    spins: 500,
+    tickets: 3,
+  },
+};
+
+
 function buildSlots() {
   const arr = Array(SEGMENTS_TOTAL).fill(null);
   // Section 1 -> 100 (MAX)
@@ -92,10 +121,17 @@ function getStarsPrice(item_type, item_id) {
   } else if (item_type === "wheel" || item_type === "bg") {
     // All paid skins use 299 ⭐ in your config
     amountStars = 299;
+  } else if (item_type === "bundle") {
+    // Booster bundles – read price from BUNDLE_CONFIG
+    const cfg = BUNDLE_CONFIG[item_id];
+    if (cfg) {
+      amountStars = cfg.stars;
+    }
   }
 
   return amountStars;
 }
+
 
 // --- Telegram helper: send Play button ---
 async function sendPlayButton(chatId, name = "") {
@@ -283,7 +319,7 @@ async function handlePreCheckout(pre) {
   }
 }
 
-// ⭐ Handle successful Stars payment → grant tier/skin
+// ⭐ Handle successful Stars payment → grant tier/skin/bundle
 async function handleSuccessfulPayment(msg) {
   const sp = msg.successful_payment;
   const from = msg.from;
@@ -332,21 +368,68 @@ async function handleSuccessfulPayment(msg) {
       if (error) {
         console.error("Insert inventory error:", error);
       }
+    } else if (item_type === "bundle") {
+      const cfg = BUNDLE_CONFIG[item_id];
+      if (!cfg) {
+        console.error("Unknown bundle id in payment:", item_id);
+      } else {
+        // 1) Read current user balances
+        const { data: row, error: selErr } = await supabase
+          .from("roff_users")
+          .select("balance, spins_left, golden_tickets")
+          .eq("tg_id", telegramId)
+          .maybeSingle();
+
+        if (selErr) {
+          console.error("Select user for bundle error:", selErr);
+        } else {
+          const currentBalance = row?.balance ?? 0;
+          const currentSpins = row?.spins_left ?? 0;
+          const currentTickets = row?.golden_tickets ?? 0;
+
+          const { error: upErr } = await supabase
+            .from("roff_users")
+            .update({
+              balance: currentBalance + cfg.rof,
+              spins_left: currentSpins + cfg.spins,
+              golden_tickets: currentTickets + cfg.tickets,
+              last_seen: new Date().toISOString(),
+            })
+            .eq("tg_id", telegramId);
+
+          if (upErr) {
+            console.error("Update bundle user error:", upErr);
+          } else {
+            console.log(
+              `Bundle ${item_id} applied to ${telegramId}: +${cfg.rof} ROF, +${cfg.spins} spins, +${cfg.tickets} tickets`
+            );
+          }
+        }
+      }
     }
 
     // Optional confirmation DM
+    let confirmationText = `✅ Payment received: ${item_type} "${item_id}" unlocked in ROFFLE!`;
+    if (item_type === "bundle") {
+      const cfg = BUNDLE_CONFIG[item_id];
+      if (cfg) {
+        confirmationText = `✅ Booster Bundle purchased: ${cfg.title}\n+${cfg.rof.toLocaleString()} $ROF · +${cfg.spins} spins · +${cfg.tickets} Golden Ticket${cfg.tickets > 1 ? "s" : ""}`;
+      }
+    }
+
     await fetch(`${TG_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: telegramId,
-        text: `✅ Payment received: ${item_type} "${item_id}" unlocked in ROFFLE!`,
+        text: confirmationText,
       }),
     });
   } catch (e) {
     console.error("handleSuccessfulPayment error:", e);
   }
 }
+
 
 // --- Webhook endpoint ---
 app.post("/webhook", async (req, res) => {
@@ -472,7 +555,7 @@ app.post("/stars/create-invoice", async (req, res) => {
       return res.status(400).json({ ok: false, error: "invalid_price" });
     }
 
-    let title = "ROFFLE item";
+        let title = "ROFFLE item";
     let description = "ROFFLE in-game unlock";
 
     if (item_type === "tier") {
@@ -486,7 +569,17 @@ app.post("/stars/create-invoice", async (req, res) => {
     } else if (item_type === "bg") {
       title = "ROFFLE Background Skin";
       description = `Unlock background skin "${item_id}" in ROFFLE.`;
+    } else if (item_type === "bundle") {
+      const cfg = BUNDLE_CONFIG[item_id];
+      if (!cfg) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "unknown_bundle" });
+      }
+      title = cfg.title;
+      description = cfg.description;
     }
+
 
     // 3) Call Telegram Bot API: createInvoiceLink
     const tgRes = await fetch(`${TG_API}/createInvoiceLink`, {
@@ -531,3 +624,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
