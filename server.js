@@ -714,6 +714,69 @@ app.post("/bundle/apply", async (req, res) => {
   }
 });
 
+// --- Miniapp API: apply generic rewards (tasks, collectibles, etc.) ---
+app.post("/reward/apply", async (req, res) => {
+  try {
+    const { tg_id, rofAdd, spinsAdd, ticketsAdd } = req.body || {};
+
+    if (!tg_id) {
+      return res.status(400).json({ ok: false, error: "missing_tg_id" });
+    }
+
+    const r = typeof rofAdd === "number" ? rofAdd : 0;
+    const s = typeof spinsAdd === "number" ? spinsAdd : 0;
+    const t = typeof ticketsAdd === "number" ? ticketsAdd : 0;
+
+    if (!r && !s && !t) {
+      return res.json({
+        ok: true,
+        balance: null,
+        spins_left: null,
+        golden_tickets: null,
+      });
+    }
+
+    // Load user
+    let user = await getOrCreateUser(tg_id);
+
+    const currentBalance = user.balance ?? 0;
+    const currentSpins = user.spins_left ?? 0;
+    const currentTickets = user.golden_tickets ?? 0;
+
+    // DO NOT cap spins on rewards
+    const newBalance = currentBalance + r;
+    const newSpins = currentSpins + s;
+    const newTickets = currentTickets + t;
+
+    const { error: upErr } = await supabase
+      .from("roff_users")
+      .update({
+        balance: newBalance,
+        spins_left: newSpins,
+        golden_tickets: newTickets,
+        last_seen: new Date().toISOString(),
+      })
+      .eq("tg_id", tg_id)
+      .maybeSingle();
+
+    if (upErr) {
+      console.error("reward/apply DB error", upErr);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({
+      ok: true,
+      balance: newBalance,
+      spins_left: newSpins,
+      golden_tickets: newTickets,
+    });
+  } catch (e) {
+    console.error("reward/apply error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+
 // --- Miniapp API: apply premium tier for a user ---
 app.post("/tier/apply", async (req, res) => {
   try {
@@ -831,6 +894,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
