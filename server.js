@@ -567,6 +567,36 @@ app.post("/spin", async (req, res) => {
   }
 });
 
+// --- Miniapp API: update spins from regen ---
+app.post("/spins/update", async (req, res) => {
+  try {
+    const { tg_id, spins_left } = req.body || {};
+
+    if (!tg_id || typeof spins_left !== "number") {
+      return res.status(400).json({ ok: false, error: "bad_args" });
+    }
+
+    const { error } = await supabase
+      .from("roff_users")
+      .update({
+        spins_left,
+        last_seen: new Date().toISOString(),
+      })
+      .eq("tg_id", tg_id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("spins/update DB error", error);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("spins/update server error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 
 // --- Telegram Stars: create invoice link for miniapp purchases ---
 app.post("/stars/create-invoice", async (req, res) => {
@@ -894,6 +924,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
