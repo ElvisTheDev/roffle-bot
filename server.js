@@ -499,16 +499,21 @@ app.post("/spin", async (req, res) => {
     // Load or create user
     let user = await getOrCreateUser(tg_id);
 
-    const availableSpins = user.spins_left ?? 0;
-    // Turbo multiplier from client (x1, x2, x5, etc.), capped for safety
-    const turbo =
-      typeof turboMult === "number" && turboMult > 0
-        ? Math.min(Math.floor(turboMult), 10)
-        : 1;
+       const availableSpins = user.spins_left ?? 0;
+
+    // Allowed Turbo multipliers from frontend
+    const allowed = [1, 5, 10, 20, 50];
+    let turbo = 1;
+
+    if (typeof turboMult === "number") {
+      const t = Math.floor(turboMult);
+      turbo = allowed.includes(t) ? t : 1;
+    }
 
     if (availableSpins < turbo) {
       return res.json({ ok: false, error: "no_spins" });
     }
+
 
     const tierKey =
       user.premium_tier && TIER_MULT[user.premium_tier]
@@ -756,6 +761,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
