@@ -619,9 +619,48 @@ app.post("/stars/create-invoice", async (req, res) => {
   }
 });
 
+// --- Miniapp API: sync user from Telegram data ---
+app.post("/user/sync", async (req, res) => {
+  try {
+    const { tg_id, username, full_name, photo_url } = req.body || {};
+
+    if (!tg_id) {
+      return res.status(400).json({ ok: false, error: "missing_tg_id" });
+    }
+
+    const baseUser = {
+      tg_id,
+      username: username || null,
+      full_name: full_name || null,
+      photo_url: photo_url || null,
+    };
+
+    const { data, error } = await supabase
+      .from("roff_users")
+      .upsert(baseUser, { onConflict: "tg_id", ignoreDuplicates: false })
+      .select("*")
+      .eq("tg_id", tg_id)
+      .single();
+
+    if (error) {
+      console.error("user/sync upsert error", error);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({
+      ok: true,
+      user: data,
+    });
+  } catch (e) {
+    console.error("user/sync error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
