@@ -683,7 +683,7 @@ app.post("/bundle/apply", async (req, res) => {
     const cap = TIER_CAP[tierKey] ?? 20;
 
     const newBalance = currentBalance + rofAdd;
-    const newSpins = Math.min(cap, currentSpins + spinsAdd);
+    const newSpins = currentSpins + spinsAdd;
     const newTickets = currentTickets + ticketsAdd;
 
     const { error: upErr } = await supabase
@@ -831,6 +831,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
