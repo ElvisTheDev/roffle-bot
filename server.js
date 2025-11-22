@@ -491,7 +491,7 @@ app.post("/webhook", async (req, res) => {
 // --- Spin endpoint (called by mini app) ---
 app.post("/spin", async (req, res) => {
   try {
-    const { tg_id } = req.body || {};
+    const { tg_id, turboMult } = req.body || {};
     if (!tg_id) {
       return res.status(400).json({ ok: false, error: "missing_tg_id" });
     }
@@ -499,7 +499,14 @@ app.post("/spin", async (req, res) => {
     // Load or create user
     let user = await getOrCreateUser(tg_id);
 
-    if ((user.spins_left ?? 0) <= 0) {
+    const availableSpins = user.spins_left ?? 0;
+    // Turbo multiplier from client (x1, x2, x5, etc.), capped for safety
+    const turbo =
+      typeof turboMult === "number" && turboMult > 0
+        ? Math.min(Math.floor(turboMult), 10)
+        : 1;
+
+    if (availableSpins < turbo) {
       return res.json({ ok: false, error: "no_spins" });
     }
 
@@ -507,18 +514,20 @@ app.post("/spin", async (req, res) => {
       user.premium_tier && TIER_MULT[user.premium_tier]
         ? user.premium_tier
         : "free";
-    const mult = TIER_MULT[tierKey];
+    const tierMult = TIER_MULT[tierKey];
 
-    // Pick random segment (0..24)
+    // Pick random segment (0..24) – this is the ONLY source of truth
     const index = randInt(0, SEGMENTS_TOTAL - 1);
     const base = slots[index].amount || 0;
-    const prize = base * mult;
+
+    const perSpinPrize = base * tierMult;
+    const prize = perSpinPrize * turbo;
 
     const newBalance = (user.balance ?? 0) + prize;
-    const newSpins = (user.spins_left ?? 0) - 1;
+    const newSpins = availableSpins - turbo;
 
     const now = new Date().toISOString();
-    const { error: upErr, data: updated } = await supabase
+    const { error: upErr } = await supabase
       .from("roff_users")
       .update({
         balance: newBalance,
@@ -526,7 +535,6 @@ app.post("/spin", async (req, res) => {
         last_seen: now,
       })
       .eq("tg_id", tg_id)
-      .select("*")
       .maybeSingle();
 
     if (upErr) {
@@ -546,6 +554,7 @@ app.post("/spin", async (req, res) => {
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
 
 // --- Telegram Stars: create invoice link for miniapp purchases ---
 app.post("/stars/create-invoice", async (req, res) => {
@@ -747,6 +756,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
