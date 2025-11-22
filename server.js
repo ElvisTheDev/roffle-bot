@@ -48,6 +48,13 @@ const TIER_MULT = {
   pro: 3,
   prem: 5,
 };
+const TIER_CAP = {
+  free: 20,
+  plus: 40,
+  pro: 60,
+  prem: 100,
+};
+
 
 // --- Booster bundles config (MUST match frontend) ---
 const BUNDLE_CONFIG = {
@@ -644,6 +651,69 @@ app.post("/stars/create-invoice", async (req, res) => {
   }
 });
 
+// --- Miniapp API: apply bundle rewards (e.g. TON-paid bundle) ---
+app.post("/bundle/apply", async (req, res) => {
+  try {
+    const { tg_id, bundle_id } = req.body || {};
+
+    if (!tg_id || !bundle_id) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const cfg = BUNDLE_CONFIG[bundle_id];
+    if (!cfg) {
+      return res.status(400).json({ ok: false, error: "unknown_bundle" });
+    }
+
+    const rofAdd = cfg.rof || 0;
+    const spinsAdd = cfg.spins || 0;
+    const ticketsAdd = cfg.tickets || 0;
+
+    // Load user
+    let user = await getOrCreateUser(tg_id);
+
+    const currentBalance = user.balance ?? 0;
+    const currentSpins = user.spins_left ?? 0;
+    const currentTickets = user.golden_tickets ?? 0;
+
+    const tierKey =
+      user.premium_tier && TIER_CAP[user.premium_tier]
+        ? user.premium_tier
+        : "free";
+    const cap = TIER_CAP[tierKey] ?? 20;
+
+    const newBalance = currentBalance + rofAdd;
+    const newSpins = Math.min(cap, currentSpins + spinsAdd);
+    const newTickets = currentTickets + ticketsAdd;
+
+    const { error: upErr } = await supabase
+      .from("roff_users")
+      .update({
+        balance: newBalance,
+        spins_left: newSpins,
+        golden_tickets: newTickets,
+        last_seen: new Date().toISOString(),
+      })
+      .eq("tg_id", tg_id)
+      .maybeSingle();
+
+    if (upErr) {
+      console.error("bundle/apply DB error", upErr);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({
+      ok: true,
+      balance: newBalance,
+      spins_left: newSpins,
+      golden_tickets: newTickets,
+    });
+  } catch (e) {
+    console.error("bundle/apply error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 // --- Miniapp API: apply premium tier for a user ---
 app.post("/tier/apply", async (req, res) => {
   try {
@@ -761,6 +831,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
