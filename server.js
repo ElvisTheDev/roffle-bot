@@ -630,6 +630,36 @@ app.post("/stars/create-invoice", async (req, res) => {
   }
 });
 
+// --- Miniapp API: apply premium tier for a user ---
+app.post("/tier/apply", async (req, res) => {
+  try {
+    const { tg_id, tier_key } = req.body || {};
+
+    if (!tg_id || !tier_key) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    // Update premium_tier in roff_users
+    const { data, error } = await supabase
+      .from("roff_users")
+      .update({ premium_tier: tier_key })
+      .eq("tg_id", tg_id)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.error("tier/apply DB error", error);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({ ok: true, user: data });
+  } catch (e) {
+    console.error("tier/apply error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+
 // --- Miniapp API: sync user from Telegram data ---
 app.post("/user/sync", async (req, res) => {
   try {
@@ -673,6 +703,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
