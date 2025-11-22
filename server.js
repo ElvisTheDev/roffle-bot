@@ -659,6 +659,50 @@ app.post("/tier/apply", async (req, res) => {
   }
 });
 
+// --- Miniapp API: unlock inventory item (wheel/bg) ---
+app.post("/inventory/unlock", async (req, res) => {
+  try {
+    const { tg_id, item_type, item_id } = req.body || {};
+
+    if (!tg_id || !item_type || !item_id) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    // Check if already owned
+    const { data: existing, error: selErr } = await supabase
+      .from("roff_inventory")
+      .select("id")
+      .eq("tg_id", tg_id)
+      .eq("item_type", item_type)
+      .eq("item_id", item_id)
+      .maybeSingle();
+
+    if (selErr) {
+      console.error("inventory/unlock select error", selErr);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    if (existing) {
+      // Already owned – nothing to insert
+      return res.json({ ok: true, alreadyOwned: true });
+    }
+
+    const { error: insErr } = await supabase
+      .from("roff_inventory")
+      .insert({ tg_id, item_type, item_id });
+
+    if (insErr) {
+      console.error("inventory/unlock insert error", insErr);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    return res.json({ ok: true, alreadyOwned: false });
+  } catch (e) {
+    console.error("inventory/unlock server error", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 
 // --- Miniapp API: sync user from Telegram data ---
 app.post("/user/sync", async (req, res) => {
@@ -703,6 +747,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
 
