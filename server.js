@@ -8,7 +8,7 @@ import cors from "cors";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const APP_URL = process.env.APP_URL || "https://roffle.vercel.app";
 const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
+const TELEGRAM_SECRET_TOKEN = process.env.TELEGRAM_SECRET_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
@@ -436,6 +436,17 @@ app.post("/webhook", async (req, res) => {
   try {
     const u = req.body;
 
+            // ✅ Security check: only accept requests with our secret token
+    if (TELEGRAM_SECRET_TOKEN) {
+      const headerToken = req.headers["x-telegram-bot-api-secret-token"];
+      if (headerToken !== TELEGRAM_SECRET_TOKEN) {
+        console.warn("❌ Webhook called with wrong or missing secret token");
+        return res.sendStatus(403);
+      }
+    }
+
+
+
     // ⭐ payment: pre-checkout
     if (u.pre_checkout_query) {
       await handlePreCheckout(u.pre_checkout_query);
@@ -662,5 +673,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ ROFFLE bot + API running on port ${PORT}`);
 });
+
 
 
